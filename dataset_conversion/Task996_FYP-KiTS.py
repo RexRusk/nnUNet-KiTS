@@ -45,7 +45,7 @@ maybe_mkdir_p(os.path.join(out, "labelsTr"))
 
 for c in cases:
     case_id = int(c.split("_")[-1])
-    if case_id < 26:
+    if case_id < 40:
         shutil.copy(os.path.join(base, c, "A", "imaging.nii.gz"), os.path.join(out, "imagesTr", c + "_0000.nii.gz"))
         shutil.copy(os.path.join(base, c, "A", "segmentation.nii.gz"), os.path.join(out, "labelsTr", c + ".nii.gz"))
     else:
