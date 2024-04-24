@@ -34,7 +34,7 @@ def subdirs(folder, join=True, prefix=None, suffix=None, sort=True):
     return res
 
 base = "/home/rusk/projects/nnUNet-KiTS/KiTS"
-out = "/home/rusk/projects/nnUNet-KiTS/DATASET/nnUNet_raw/Dataset996_FYP-KiTS"
+out = "/home/rusk/projects/nnUNet-KiTS/DATASET/nnUNet_raw/Dataset997_FYP-KiTS-D"
 
 cases = subdirs(base, join=False)
 
@@ -46,10 +46,10 @@ maybe_mkdir_p(os.path.join(out, "labelsTr"))
 for c in cases:
     case_id = int(c.split("_")[-1])
     if case_id < 40:
-        shutil.copy(os.path.join(base, c, "A", "imaging.nii.gz"), os.path.join(out, "imagesTr", c + "_0000.nii.gz"))
-        shutil.copy(os.path.join(base, c, "A", "segmentation.nii.gz"), os.path.join(out, "labelsTr", c + ".nii.gz"))
+        shutil.copy(os.path.join(base, c, "D", "imaging.nii.gz"), os.path.join(out, "imagesTr", c + "_0000.nii.gz"))
+        shutil.copy(os.path.join(base, c, "D", "segmentation.nii.gz"), os.path.join(out, "labelsTr", c + ".nii.gz"))
     else:
-        shutil.copy(os.path.join(base, c, "A", "imaging.nii.gz"), os.path.join(out, "imagesTs", c + "_0000.nii.gz"))
+        shutil.copy(os.path.join(base, c, "D", "imaging.nii.gz"), os.path.join(out, "imagesTs", c + "_0000.nii.gz"))
 
 json_dict = {}
 """
@@ -63,7 +63,7 @@ numTest: 测试集数量
 training: 训练集的image 和 label 地址对
 test: 只包含测试集的image. 这里跟Training不一样
 """
-json_dict['name'] = "FYP-KiTS"
+json_dict['name'] = "FYP-KiTS-D"
 json_dict['description'] = "kidney and kidney tumor segmentation"
 json_dict['tensorImageSize'] = "4D"
 json_dict['reference'] = "Final year project KiTS data for nnunet v2"
@@ -74,11 +74,11 @@ json_dict['channel_names'] = {
     "0": "CT",
 }
 json_dict['labels'] = {
-    "background": "0",
-    "Tumor": "1",
-    "Medulla": "2",
-    "Cortex": "3"
+    "background": 0,
+    "Tumor": 1,
+    "Kidney": (2, 3)
 }
+json_dict['regions_class_order'] = (1, 2)
 json_dict['numTraining'] = len(cases)  # 应该是40例
 json_dict['file_ending'] = ".nii.gz"
 json_dict['numTest'] = 0
