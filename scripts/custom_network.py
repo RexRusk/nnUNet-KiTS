@@ -1,623 +1,282 @@
-# from dynamic_network_architectures.architectures.unet import PlainConvUNet
+# Copyright (c) MONAI Consortium
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#     http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from typing import Union, Type, List, Tuple
+from __future__ import annotations
+
+from collections.abc import Sequence
 
 import torch
-from dynamic_network_architectures.building_blocks.helper import convert_conv_op_to_dim
-from dynamic_network_architectures.initialization.weight_init import InitWeights_He
-from torch import nn
-from torch.nn.modules.conv import _ConvNd
-from torch.nn.modules.dropout import _DropoutNd
-from dynamic_network_architectures.building_blocks.helper import maybe_convert_scalar_to_list, get_matching_pool_op
-import numpy as np
-from dynamic_network_architectures.building_blocks.helper import get_matching_convtransp
+import torch.nn as nn
 
-import numpy as np
-from torch.nn import init
+from monai.networks.blocks.convolutions import Convolution
+from monai.networks.layers.factories import Norm
 
-"""
+__all__ = ["AttentionUnet"]
 
-"""
-class SEPlainConvUNet(nn.Module):
-    def __init__(self,
-                 input_channels: int,
-                 n_stages: int,
-                 features_per_stage: Union[int, List[int], Tuple[int, ...]],
-                 conv_op: Type[_ConvNd],
-                 kernel_sizes: Union[int, List[int], Tuple[int, ...]],
-                 strides: Union[int, List[int], Tuple[int, ...]],
-                 n_conv_per_stage: Union[int, List[int], Tuple[int, ...]],
-                 num_classes: int,
-                 n_conv_per_stage_decoder: Union[int, Tuple[int, ...], List[int]],
-                 conv_bias: bool = False,
-                 norm_op: Union[None, Type[nn.Module]] = None,
-                 norm_op_kwargs: dict = None,
-                 dropout_op: Union[None, Type[_DropoutNd]] = None,
-                 dropout_op_kwargs: dict = None,
-                 nonlin: Union[None, Type[torch.nn.Module]] = None,
-                 nonlin_kwargs: dict = None,
-                 deep_supervision: bool = False,
-                 nonlin_first: bool = False
-                 ):
-        """
-        nonlin_first: if True you get conv -> nonlin -> norm. Else it's conv -> norm -> nonlin
-        """
+
+class ConvBlock(nn.Module):
+
+    def __init__(
+        self,
+        spatial_dims: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        strides: int = 1,
+        dropout=0.0,
+    ):
         super().__init__()
-        if isinstance(n_conv_per_stage, int):
-            n_conv_per_stage = [n_conv_per_stage] * n_stages
-        if isinstance(n_conv_per_stage_decoder, int):
-            n_conv_per_stage_decoder = [n_conv_per_stage_decoder] * (n_stages - 1)
-        assert len(n_conv_per_stage) == n_stages, "n_conv_per_stage must have as many entries as we have " \
-                                                  f"resolution stages. here: {n_stages}. " \
-                                                  f"n_conv_per_stage: {n_conv_per_stage}"
-        assert len(n_conv_per_stage_decoder) == (n_stages - 1), "n_conv_per_stage_decoder must have one less entries " \
-                                                                f"as we have resolution stages. here: {n_stages} " \
-                                                                f"stages, so it should have {n_stages - 1} entries. " \
-                                                                f"n_conv_per_stage_decoder: {n_conv_per_stage_decoder}"
-        self.encoder = SEPlainConvEncoder(input_channels, n_stages, features_per_stage, conv_op, kernel_sizes, strides,
-                                          n_conv_per_stage, conv_bias, norm_op, norm_op_kwargs, dropout_op,
-                                          dropout_op_kwargs, nonlin, nonlin_kwargs, return_skips=True,
-                                          nonlin_first=nonlin_first)
-        self.decoder = SEUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
-                                     nonlin_first=nonlin_first)
-        print('using se unet...')
-
-    def forward(self, x):
-        skips = self.encoder(x)
-        return self.decoder(skips)
-
-    def compute_conv_feature_map_size(self, input_size):
-        assert len(input_size) == convert_conv_op_to_dim(
-            self.encoder.conv_op), "just give the image size without color/feature channels or " \
-                                   "batch channel. Do not give input_size=(b, c, x, y(, z)). " \
-                                   "Give input_size=(x, y(, z))!"
-        return self.encoder.compute_conv_feature_map_size(input_size) + self.decoder.compute_conv_feature_map_size(
-            input_size)
-
-    @staticmethod
-    def initialize(module):
-        InitWeights_He(1e-2)(module)
-
-
-class SEPlainConvEncoder(nn.Module):
-    def __init__(self,
-                 input_channels: int,
-                 n_stages: int,
-                 features_per_stage: Union[int, List[int], Tuple[int, ...]],
-                 conv_op: Type[_ConvNd],
-                 kernel_sizes: Union[int, List[int], Tuple[int, ...]],
-                 strides: Union[int, List[int], Tuple[int, ...]],
-                 n_conv_per_stage: Union[int, List[int], Tuple[int, ...]],
-                 conv_bias: bool = False,
-                 norm_op: Union[None, Type[nn.Module]] = None,
-                 norm_op_kwargs: dict = None,
-                 dropout_op: Union[None, Type[_DropoutNd]] = None,
-                 dropout_op_kwargs: dict = None,
-                 nonlin: Union[None, Type[torch.nn.Module]] = None,
-                 nonlin_kwargs: dict = None,
-                 return_skips: bool = False,
-                 nonlin_first: bool = False,
-                 pool: str = 'conv'
-                 ):
-
-        super().__init__()
-        if isinstance(kernel_sizes, int):
-            kernel_sizes = [kernel_sizes] * n_stages
-        if isinstance(features_per_stage, int):
-            features_per_stage = [features_per_stage] * n_stages
-        if isinstance(n_conv_per_stage, int):
-            n_conv_per_stage = [n_conv_per_stage] * n_stages
-        if isinstance(strides, int):
-            strides = [strides] * n_stages
-        assert len(
-            kernel_sizes) == n_stages, "kernel_sizes must have as many entries as we have resolution stages (n_stages)"
-        assert len(
-            n_conv_per_stage) == n_stages, "n_conv_per_stage must have as many entries as we have resolution stages (n_stages)"
-        assert len(
-            features_per_stage) == n_stages, "features_per_stage must have as many entries as we have resolution stages (n_stages)"
-        assert len(strides) == n_stages, "strides must have as many entries as we have resolution stages (n_stages). " \
-                                         "Important: first entry is recommended to be 1, else we run strided conv drectly on the input"
-
-        stages = []
-        for s in range(n_stages):
-            stage_modules = []
-            if pool == 'max' or pool == 'avg':
-                if (isinstance(strides[s], int) and strides[s] != 1) or \
-                        isinstance(strides[s], (tuple, list)) and any([i != 1 for i in strides[s]]):
-                    stage_modules.append(
-                        get_matching_pool_op(conv_op, pool_type=pool)(kernel_size=strides[s], stride=strides[s]))
-                conv_stride = 1
-            elif pool == 'conv':
-                conv_stride = strides[s]
-            else:
-                raise RuntimeError()
-            stage_modules.append(SEStackedConvBlocks(
-                n_conv_per_stage[s], conv_op, input_channels, features_per_stage[s], kernel_sizes[s], conv_stride,
-                conv_bias, norm_op, norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
-            ))
-            stages.append(nn.Sequential(*stage_modules))
-            input_channels = features_per_stage[s]
-
-        self.stages = nn.Sequential(*stages)
-        self.output_channels = features_per_stage
-        self.strides = [maybe_convert_scalar_to_list(conv_op, i) for i in strides]
-        self.return_skips = return_skips
-
-        # we store some things that a potential decoder needs
-        self.conv_op = conv_op
-        self.norm_op = norm_op
-        self.norm_op_kwargs = norm_op_kwargs
-        self.nonlin = nonlin
-        self.nonlin_kwargs = nonlin_kwargs
-        self.dropout_op = dropout_op
-        self.dropout_op_kwargs = dropout_op_kwargs
-        self.conv_bias = conv_bias
-        self.kernel_sizes = kernel_sizes
-
-    def forward(self, x):
-        ret = []
-        for s in self.stages:
-            x = s(x)
-            ret.append(x)
-        if self.return_skips:
-            return ret
-        else:
-            return ret[-1]
-
-    def compute_conv_feature_map_size(self, input_size):
-        output = np.int64(0)
-        for s in range(len(self.stages)):
-            if isinstance(self.stages[s], nn.Sequential):
-                for sq in self.stages[s]:
-                    if hasattr(sq, 'compute_conv_feature_map_size'):
-                        output += self.stages[s][-1].compute_conv_feature_map_size(input_size)
-            else:
-                output += self.stages[s].compute_conv_feature_map_size(input_size)
-            input_size = [i // j for i, j in zip(input_size, self.strides[s])]
-        return output
-
-
-class SEUNetDecoder(nn.Module):
-    def __init__(self,
-                 encoder: Union[SEPlainConvEncoder],
-                 num_classes: int,
-                 n_conv_per_stage: Union[int, Tuple[int, ...], List[int]],
-                 deep_supervision,
-                 nonlin_first: bool = False,
-                 norm_op: Union[None, Type[nn.Module]] = None,
-                 norm_op_kwargs: dict = None,
-                 dropout_op: Union[None, Type[_DropoutNd]] = None,
-                 dropout_op_kwargs: dict = None,
-                 nonlin: Union[None, Type[torch.nn.Module]] = None,
-                 nonlin_kwargs: dict = None,
-                 conv_bias: bool = None
-                 ):
-        """
-        This class needs the skips of the encoder as input in its forward.
-        the encoder goes all the way to the bottleneck, so that's where the decoder picks up. stages in the decoder
-        are sorted by order of computation, so the first stage has the lowest resolution and takes the bottleneck
-        features and the lowest skip as inputs
-        the decoder has two (three) parts in each stage:
-        1) conv transpose to upsample the feature maps of the stage below it (or the bottleneck in case of the first stage)
-        2) n_conv_per_stage conv blocks to let the two inputs get to know each other and merge
-        3) (optional if deep_supervision=True) a segmentation output Todo: enable upsample logits?
-        :param encoder:
-        :param num_classes:
-        :param n_conv_per_stage:
-        :param deep_supervision:
-        """
-        super().__init__()
-        self.deep_supervision = deep_supervision
-        self.encoder = encoder
-        self.num_classes = num_classes
-        n_stages_encoder = len(encoder.output_channels)
-        if isinstance(n_conv_per_stage, int):
-            n_conv_per_stage = [n_conv_per_stage] * (n_stages_encoder - 1)
-        assert len(n_conv_per_stage) == n_stages_encoder - 1, "n_conv_per_stage must have as many entries as we have " \
-                                                              "resolution stages - 1 (n_stages in encoder - 1), " \
-                                                              "here: %d" % n_stages_encoder
-
-        transpconv_op = get_matching_convtransp(conv_op=encoder.conv_op)
-        conv_bias = encoder.conv_bias if conv_bias is None else conv_bias
-        norm_op = encoder.norm_op if norm_op is None else norm_op
-        norm_op_kwargs = encoder.norm_op_kwargs if norm_op_kwargs is None else norm_op_kwargs
-        dropout_op = encoder.dropout_op if dropout_op is None else dropout_op
-        dropout_op_kwargs = encoder.dropout_op_kwargs if dropout_op_kwargs is None else dropout_op_kwargs
-        nonlin = encoder.nonlin if nonlin is None else nonlin
-        nonlin_kwargs = encoder.nonlin_kwargs if nonlin_kwargs is None else nonlin_kwargs
-
-        # we start with the bottleneck and work out way up
-        stages = []
-        transpconvs = []
-        seg_layers = []
-        for s in range(1, n_stages_encoder):
-            input_features_below = encoder.output_channels[-s]
-            input_features_skip = encoder.output_channels[-(s + 1)]
-            stride_for_transpconv = encoder.strides[-s]
-            transpconvs.append(transpconv_op(
-                input_features_below, input_features_skip, stride_for_transpconv, stride_for_transpconv,
-                bias=conv_bias
-            ))
-            # input features to conv is 2x input_features_skip (concat input_features_skip with transpconv output)
-            stages.append(SEStackedConvBlocks(
-                n_conv_per_stage[s - 1], encoder.conv_op, 2 * input_features_skip, input_features_skip,
-                encoder.kernel_sizes[-(s + 1)], 1,
-                conv_bias,
-                norm_op,
-                norm_op_kwargs,
-                dropout_op,
-                dropout_op_kwargs,
-                nonlin,
-                nonlin_kwargs,
-                nonlin_first
-            ))
-
-            # we always build the deep supervision outputs so that we can always load parameters. If we don't do this
-            # then a model trained with deep_supervision=True could not easily be loaded at inference time where
-            # deep supervision is not needed. It's just a convenience thing
-            seg_layers.append(encoder.conv_op(input_features_skip, num_classes, 1, 1, 0, bias=True))
-
-        self.stages = nn.ModuleList(stages)
-        self.transpconvs = nn.ModuleList(transpconvs)
-        self.seg_layers = nn.ModuleList(seg_layers)
-
-    def forward(self, skips):
-        """
-        we expect to get the skips in the order they were computed, so the bottleneck should be the last entry
-        :param skips:
-        :return:
-        """
-        lres_input = skips[-1]
-        seg_outputs = []
-        for s in range(len(self.stages)):
-            x = self.transpconvs[s](lres_input)
-            x = torch.cat((x, skips[-(s + 2)]), 1)
-            x = self.stages[s](x)
-            if self.deep_supervision:
-                seg_outputs.append(self.seg_layers[s](x))
-            elif s == (len(self.stages) - 1):
-                seg_outputs.append(self.seg_layers[-1](x))
-            lres_input = x
-
-        # invert seg outputs so that the largest segmentation prediction is returned first
-        seg_outputs = seg_outputs[::-1]
-
-        if not self.deep_supervision:
-            r = seg_outputs[0]
-        else:
-            r = seg_outputs
-        return r
-
-    def compute_conv_feature_map_size(self, input_size):
-        """
-        IMPORTANT: input_size is the input_size of the encoder!
-        :param input_size:
-        :return:
-        """
-        # first we need to compute the skip sizes. Skip bottleneck because all output feature maps of our ops will at
-        # least have the size of the skip above that (therefore -1)
-        skip_sizes = []
-        for s in range(len(self.encoder.strides) - 1):
-            skip_sizes.append([i // j for i, j in zip(input_size, self.encoder.strides[s])])
-            input_size = skip_sizes[-1]
-        # print(skip_sizes)
-
-        assert len(skip_sizes) == len(self.stages)
-
-        # our ops are the other way around, so let's match things up
-        output = np.int64(0)
-        for s in range(len(self.stages)):
-            # print(skip_sizes[-(s+1)], self.encoder.output_channels[-(s+2)])
-            # conv blocks
-            output += self.stages[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
-            # trans conv
-            output += np.prod([self.encoder.output_channels[-(s + 2)], *skip_sizes[-(s + 1)]], dtype=np.int64)
-            # segmentation
-            if self.deep_supervision or (s == (len(self.stages) - 1)):
-                output += np.prod([self.num_classes, *skip_sizes[-(s + 1)]], dtype=np.int64)
-        return output
-
-
-class SEStackedConvBlocks(nn.Module):
-    def __init__(self,
-                 num_convs: int,
-                 conv_op: Type[_ConvNd],
-                 input_channels: int,
-                 output_channels: Union[int, List[int], Tuple[int, ...]],
-                 kernel_size: Union[int, List[int], Tuple[int, ...]],
-                 initial_stride: Union[int, List[int], Tuple[int, ...]],
-                 conv_bias: bool = False,
-                 norm_op: Union[None, Type[nn.Module]] = None,
-                 norm_op_kwargs: dict = None,
-                 dropout_op: Union[None, Type[_DropoutNd]] = None,
-                 dropout_op_kwargs: dict = None,
-                 nonlin: Union[None, Type[torch.nn.Module]] = None,
-                 nonlin_kwargs: dict = None,
-                 nonlin_first: bool = False
-                 ):
-        """
-        :param conv_op:
-        :param num_convs:
-        :param input_channels:
-        :param output_channels: can be int or a list/tuple of int. If list/tuple are provided, each entry is for
-        one conv. The length of the list/tuple must then naturally be num_convs
-        :param kernel_size:
-        :param initial_stride:
-        :param conv_bias:
-        :param norm_op:
-        :param norm_op_kwargs:
-        :param dropout_op:
-        :param dropout_op_kwargs:
-        :param nonlin:
-        :param nonlin_kwargs:
-        """
-        super().__init__()
-        if not isinstance(output_channels, (tuple, list)):
-            output_channels = [output_channels] * num_convs
-
-        self.convs = nn.Sequential(
-            ConvDropoutNormReLU(
-                conv_op, input_channels, output_channels[0], kernel_size, initial_stride, conv_bias, norm_op,
-                norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
+        layers = [
+            Convolution(
+                spatial_dims=spatial_dims,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                strides=strides,
+                padding=None,
+                adn_ordering="NDA",
+                act="relu",
+                norm=Norm.BATCH,
+                dropout=dropout,
             ),
-            *[
-                ConvDropoutNormReLU(
-                    conv_op, output_channels[i - 1], output_channels[i], kernel_size, 1, conv_bias, norm_op,
-                    norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
-                )
-                for i in range(1, num_convs - 1)
-            ],
+            Convolution(
+                spatial_dims=spatial_dims,
+                in_channels=out_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                strides=1,
+                padding=None,
+                adn_ordering="NDA",
+                act="relu",
+                norm=Norm.BATCH,
+                dropout=dropout,
+            ),
+        ]
+        self.conv = nn.Sequential(*layers)
 
-            SE(
-                conv_op, output_channels[-2], output_channels[-1], kernel_size, 1, conv_bias, norm_op,
-                norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
-            )
-
-        )
-
-        self.act = nonlin(**nonlin_kwargs)
-
-        self.output_channels = output_channels[-1]
-        self.initial_stride = maybe_convert_scalar_to_list(conv_op, initial_stride)
-
-    def forward(self, x):
-        out = self.convs(x)
-        out = self.act(out)
-        return out
-
-    def compute_conv_feature_map_size(self, input_size):
-        assert len(input_size) == len(
-            self.initial_stride), "just give the image size without color/feature channels or " \
-                                  "batch channel. Do not give input_size=(b, c, x, y(, z)). " \
-                                  "Give input_size=(x, y(, z))!"
-        output = self.convs[0].compute_conv_feature_map_size(input_size)
-        size_after_stride = [i // j for i, j in zip(input_size, self.initial_stride)]
-        for b in self.convs[1:]:
-            output += b.compute_conv_feature_map_size(size_after_stride)
-        return output
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_c: torch.Tensor = self.conv(x)
+        return x_c
 
 
-class ConvDropoutNormReLU(nn.Module):
-    def __init__(self,
-                 conv_op: Type[_ConvNd],
-                 input_channels: int,
-                 output_channels: int,
-                 kernel_size: Union[int, List[int], Tuple[int, ...]],
-                 stride: Union[int, List[int], Tuple[int, ...]],
-                 conv_bias: bool = False,
-                 norm_op: Union[None, Type[nn.Module]] = None,
-                 norm_op_kwargs: dict = None,
-                 dropout_op: Union[None, Type[_DropoutNd]] = None,
-                 dropout_op_kwargs: dict = None,
-                 nonlin: Union[None, Type[torch.nn.Module]] = None,
-                 nonlin_kwargs: dict = None,
-                 nonlin_first: bool = False
-                 ):
-        super(ConvDropoutNormReLU, self).__init__()
-        self.input_channels = input_channels
-        self.output_channels = output_channels
-        stride = maybe_convert_scalar_to_list(conv_op, stride)
-        self.stride = stride
+class UpConv(nn.Module):
 
-        kernel_size = maybe_convert_scalar_to_list(conv_op, kernel_size)
-        if norm_op_kwargs is None:
-            norm_op_kwargs = {}
-        if nonlin_kwargs is None:
-            nonlin_kwargs = {}
-
-        ops = []
-
-        self.conv = conv_op(
-            input_channels,
-            output_channels,
-            kernel_size,
-            stride,
-            padding=[(i - 1) // 2 for i in kernel_size],
-            dilation=1,
-            bias=conv_bias,
-        )
-        ops.append(self.conv)
-
-        if dropout_op is not None:
-            self.dropout = dropout_op(**dropout_op_kwargs)
-            ops.append(self.dropout)
-
-        if norm_op is not None:
-            self.norm = norm_op(output_channels, **norm_op_kwargs)
-            ops.append(self.norm)
-
-        if nonlin is not None:
-            self.nonlin = nonlin(**nonlin_kwargs)
-            ops.append(self.nonlin)
-
-        if nonlin_first and (norm_op is not None and nonlin is not None):
-            ops[-1], ops[-2] = ops[-2], ops[-1]
-
-        self.all_modules = nn.Sequential(*ops)
-
-    def forward(self, x):
-        return self.all_modules(x)
-
-    def compute_conv_feature_map_size(self, input_size):
-        assert len(input_size) == len(self.stride), "just give the image size without color/feature channels or " \
-                                                    "batch channel. Do not give input_size=(b, c, x, y(, z)). " \
-                                                    "Give input_size=(x, y(, z))!"
-        output_size = [i // j for i, j in zip(input_size, self.stride)]  # we always do same padding
-        return np.prod([self.output_channels, *output_size], dtype=np.int64)
-
-
-class ConvDropoutNorm(nn.Module):
-    def __init__(self,
-                 conv_op: Type[_ConvNd],
-                 input_channels: int,
-                 output_channels: int,
-                 kernel_size: Union[int, List[int], Tuple[int, ...]],
-                 stride: Union[int, List[int], Tuple[int, ...]],
-                 conv_bias: bool = False,
-                 norm_op: Union[None, Type[nn.Module]] = None,
-                 norm_op_kwargs: dict = None,
-                 dropout_op: Union[None, Type[_DropoutNd]] = None,
-                 dropout_op_kwargs: dict = None,
-                 nonlin: Union[None, Type[torch.nn.Module]] = None,
-                 nonlin_kwargs: dict = None,
-                 nonlin_first: bool = False
-                 ):
-        super(ConvDropoutNorm, self).__init__()
-        self.input_channels = input_channels
-        self.output_channels = output_channels
-        stride = maybe_convert_scalar_to_list(conv_op, stride)
-        self.stride = stride
-
-        kernel_size = maybe_convert_scalar_to_list(conv_op, kernel_size)
-        if norm_op_kwargs is None:
-            norm_op_kwargs = {}
-        if nonlin_kwargs is None:
-            nonlin_kwargs = {}
-
-        ops = []
-
-        self.conv = conv_op(
-            input_channels,
-            output_channels,
-            kernel_size,
-            stride,
-            padding=[(i - 1) // 2 for i in kernel_size],
-            dilation=1,
-            bias=conv_bias,
-        )
-        ops.append(self.conv)
-
-        if dropout_op is not None:
-            self.dropout = dropout_op(**dropout_op_kwargs)
-            ops.append(self.dropout)
-
-        if norm_op is not None:
-            self.norm = norm_op(output_channels, **norm_op_kwargs)
-            ops.append(self.norm)
-
-        self.all_modules = nn.Sequential(*ops)
-
-    def forward(self, x):
-        return self.all_modules(x)
-
-    def compute_conv_feature_map_size(self, input_size):
-        assert len(input_size) == len(self.stride), "just give the image size without color/feature channels or " \
-                                                    "batch channel. Do not give input_size=(b, c, x, y(, z)). " \
-                                                    "Give input_size=(x, y(, z))!"
-        output_size = [i // j for i, j in zip(input_size, self.stride)]  # we always do same padding
-        return np.prod([self.output_channels, *output_size], dtype=np.int64)
-
-
-class SE(nn.Module):
-    def __init__(self,
-                 conv_op: Type[_ConvNd],
-                 input_channels: int,
-                 output_channels: int,
-                 kernel_size: Union[int, List[int], Tuple[int, ...]],
-                 stride: Union[int, List[int], Tuple[int, ...]],
-                 conv_bias: bool = False,
-                 norm_op: Union[None, Type[nn.Module]] = None,
-                 norm_op_kwargs: dict = None,
-                 dropout_op: Union[None, Type[_DropoutNd]] = None,
-                 dropout_op_kwargs: dict = None,
-                 nonlin: Union[None, Type[torch.nn.Module]] = None,
-                 nonlin_kwargs: dict = None,
-                 nonlin_first: bool = False
-                 ):
-        super(SE, self).__init__()
-        self.input_channels = input_channels
-        self.output_channels = output_channels
-        stride = maybe_convert_scalar_to_list(conv_op, stride)
-        self.stride = stride
-
-        kernel_size = maybe_convert_scalar_to_list(conv_op, kernel_size)
-        if norm_op_kwargs is None:
-            norm_op_kwargs = {}
-        if nonlin_kwargs is None:
-            nonlin_kwargs = {}
-
-        ops = []
-
-        self.conv = conv_op(
-            input_channels,
-            output_channels,
-            kernel_size,
-            stride,
-            padding=[(i - 1) // 2 for i in kernel_size],
-            dilation=1,
-            bias=conv_bias,
-        )
-        ops.append(self.conv)
-
-        if dropout_op is not None:
-            self.dropout = dropout_op(**dropout_op_kwargs)
-            ops.append(self.dropout)
-
-        if norm_op is not None:
-            self.norm = norm_op(output_channels, **norm_op_kwargs)
-            ops.append(self.norm)
-
-        self.all_modules = nn.Sequential(*ops)
-        self.se = SEAttention(conv_op=conv_op, channel=output_channels)
-
-    def forward(self, x):
-        x = self.all_modules(x)
-        x = self.se(x) * x
-        return x
-
-    def compute_conv_feature_map_size(self, input_size):
-        assert len(input_size) == len(self.stride), "just give the image size without color/feature channels or " \
-                                                    "batch channel. Do not give input_size=(b, c, x, y(, z)). " \
-                                                    "Give input_size=(x, y(, z))!"
-        output_size = [i // j for i, j in zip(input_size, self.stride)]  # we always do same padding
-        return np.prod([self.output_channels, *output_size], dtype=np.int64)
-
-
-class SEAttention(nn.Module):
-    def __init__(self, conv_op, channel=512, reduction=16):
+    def __init__(self, spatial_dims: int, in_channels: int, out_channels: int, kernel_size=3, strides=2, dropout=0.0):
         super().__init__()
-
-        if conv_op == torch.nn.modules.conv.Conv2d:
-            self.pool = nn.AdaptiveAvgPool2d(1)
-        elif conv_op == torch.nn.modules.conv.Conv3d:
-            self.pool = nn.AdaptiveAvgPool3d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(channel // reduction, channel, bias=False),
-            nn.Sigmoid()
+        self.up = Convolution(
+            spatial_dims,
+            in_channels,
+            out_channels,
+            strides=strides,
+            kernel_size=kernel_size,
+            act="relu",
+            adn_ordering="NDA",
+            norm=Norm.BATCH,
+            dropout=dropout,
+            is_transposed=True,
         )
 
-    def forward(self, x):
-        size = x.size()
-        b, c = size[0], size[1]
-        y = self.pool(x).view(b, c)
-        y = self.fc(y).view(b, c, *[1 for i in range(len(size) - 2)])
-        return x * y.expand_as(x)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_u: torch.Tensor = self.up(x)
+        return x_u
 
-    def init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                init.normal_(m.weight, std=0.001)
-                if m.bias is not None:
-                    init.constant_(m.bias, 0)
+
+class AttentionBlock(nn.Module):
+
+    def __init__(self, spatial_dims: int, f_int: int, f_g: int, f_l: int, dropout=0.0):
+        super().__init__()
+        self.W_g = nn.Sequential(
+            Convolution(
+                spatial_dims=spatial_dims,
+                in_channels=f_g,
+                out_channels=f_int,
+                kernel_size=1,
+                strides=1,
+                padding=0,
+                dropout=dropout,
+                conv_only=True,
+            ),
+            Norm[Norm.BATCH, spatial_dims](f_int),
+        )
+
+        self.W_x = nn.Sequential(
+            Convolution(
+                spatial_dims=spatial_dims,
+                in_channels=f_l,
+                out_channels=f_int,
+                kernel_size=1,
+                strides=1,
+                padding=0,
+                dropout=dropout,
+                conv_only=True,
+            ),
+            Norm[Norm.BATCH, spatial_dims](f_int),
+        )
+
+        self.psi = nn.Sequential(
+            Convolution(
+                spatial_dims=spatial_dims,
+                in_channels=f_int,
+                out_channels=1,
+                kernel_size=1,
+                strides=1,
+                padding=0,
+                dropout=dropout,
+                conv_only=True,
+            ),
+            Norm[Norm.BATCH, spatial_dims](1),
+            nn.Sigmoid(),
+        )
+
+        self.relu = nn.ReLU()
+
+    def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        psi: torch.Tensor = self.relu(g1 + x1)
+        psi = self.psi(psi)
+
+        return x * psi
+
+
+class AttentionLayer(nn.Module):
+
+    def __init__(
+        self,
+        spatial_dims: int,
+        in_channels: int,
+        out_channels: int,
+        submodule: nn.Module,
+        up_kernel_size=3,
+        strides=2,
+        dropout=0.0,
+    ):
+        super().__init__()
+        self.attention = AttentionBlock(
+            spatial_dims=spatial_dims, f_g=in_channels, f_l=in_channels, f_int=in_channels // 2
+        )
+        self.upconv = UpConv(
+            spatial_dims=spatial_dims,
+            in_channels=out_channels,
+            out_channels=in_channels,
+            strides=strides,
+            kernel_size=up_kernel_size,
+        )
+        self.merge = Convolution(
+            spatial_dims=spatial_dims, in_channels=2 * in_channels, out_channels=in_channels, dropout=dropout
+        )
+        self.submodule = submodule
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        fromlower = self.upconv(self.submodule(x))
+        att = self.attention(g=fromlower, x=x)
+        att_m: torch.Tensor = self.merge(torch.cat((att, fromlower), dim=1))
+        return att_m
+
+
+class AttentionUnet(nn.Module):
+    """
+    Attention Unet based on
+    Otkay et al. "Attention U-Net: Learning Where to Look for the Pancreas"
+    https://arxiv.org/abs/1804.03999
+
+    Args:
+        spatial_dims: number of spatial dimensions of the input image.
+        in_channels: number of the input channel.
+        out_channels: number of the output classes.
+        channels (Sequence[int]): sequence of channels. Top block first. The length of `channels` should be no less than 2.
+        strides (Sequence[int]): stride to use for convolutions.
+        kernel_size: convolution kernel size.
+        up_kernel_size: convolution kernel size for transposed convolution layers.
+        dropout: dropout ratio. Defaults to no dropout.
+    """
+
+    def __init__(
+        self,
+        spatial_dims: int,
+        in_channels: int,
+        out_channels: int,
+        channels: Sequence[int],
+        strides: Sequence[int],
+        kernel_size: Sequence[int] | int = 3,
+        up_kernel_size: Sequence[int] | int = 3,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.dimensions = spatial_dims
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.channels = channels
+        self.strides = strides
+        self.kernel_size = kernel_size
+        self.dropout = dropout
+
+        head = ConvBlock(spatial_dims=spatial_dims, in_channels=in_channels, out_channels=channels[0], dropout=dropout)
+        reduce_channels = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=channels[0],
+            out_channels=out_channels,
+            kernel_size=1,
+            strides=1,
+            padding=0,
+            conv_only=True,
+        )
+        self.up_kernel_size = up_kernel_size
+
+        def _create_block(channels: Sequence[int], strides: Sequence[int]) -> nn.Module:
+            if len(channels) > 2:
+                subblock = _create_block(channels[1:], strides[1:])
+                return AttentionLayer(
+                    spatial_dims=spatial_dims,
+                    in_channels=channels[0],
+                    out_channels=channels[1],
+                    submodule=nn.Sequential(
+                        ConvBlock(
+                            spatial_dims=spatial_dims,
+                            in_channels=channels[0],
+                            out_channels=channels[1],
+                            strides=strides[0],
+                            dropout=self.dropout,
+                        ),
+                        subblock,
+                    ),
+                    up_kernel_size=self.up_kernel_size,
+                    strides=strides[0],
+                    dropout=dropout,
+                )
+            else:
+                # the next layer is the bottom so stop recursion,
+                # create the bottom layer as the subblock for this layer
+                return self._get_bottom_layer(channels[0], channels[1], strides[0])
+
+        encdec = _create_block(self.channels, self.strides)
+        self.model = nn.Sequential(head, encdec, reduce_channels)
+
+    def _get_bottom_layer(self, in_channels: int, out_channels: int, strides: int) -> nn.Module:
+        return AttentionLayer(
+            spatial_dims=self.dimensions,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            submodule=ConvBlock(
+                spatial_dims=self.dimensions,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                strides=strides,
+                dropout=self.dropout,
+            ),
+            up_kernel_size=self.up_kernel_size,
+            strides=strides,
+            dropout=self.dropout,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_m: torch.Tensor = self.model(x)
+        return x_m

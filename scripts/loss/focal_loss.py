@@ -1,3 +1,5 @@
+from typing import Union, List
+
 import torch
 from torch import nn, Tensor
 import numpy as np
@@ -13,11 +15,23 @@ class FocalLossWithRobustness(nn.Module):
     Input must be logits, not probabilities!
 
     Args:
-        gamma (float): Focusing parameter. A higher value gives more weight to hard-to-classify examples.
+        gamma (float): Focusing parameter. A higher value gives more weight to hard-to-classify examples. default:2.0 (when gamma=0, equals to cross entropy)
         alpha (float or list[float]): Weighting factor for positive examples. Can be a single value or a list of values per class.
         ignore_index (int): Index to ignore in the target tensor.
         reduction (str): Specifies the reduction to apply to the output: 'none' | 'mean' | 'sum'. Default: 'mean'.
     """
+
+    '''
+    def focal_loss(y_real, y_pred, eps=1e-8, gamma=2):
+        y_pred = torch.clamp(y_pred, min=eps, max=1 - eps)
+        y_pred = torch.sigmoid(y_pred)
+        y_real = torch.clamp(y_real, min=eps)
+        your_loss = -torch.sum(
+            ((1 - y_pred) ** gamma) * y_real * torch.log(y_pred) + (y_pred ** gamma) * (1 - y_real) * torch.log(
+                1 - y_pred))
+
+        return your_loss
+    '''
 
     def __init__(self, gamma: float = 2.0, alpha: Union[float, List[float]] = 0.25, ignore_index: int = -100, reduction: str = "mean"):
         super(FocalLossWithRobustness, self).__init__()

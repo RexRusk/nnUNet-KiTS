@@ -14,7 +14,7 @@ import numpy as np
 from torch.nn import init
 
 """
-
+This script has some bugs, do not use it!
 """
 class SEPlainConvUNet(nn.Module):
     def __init__(self,
