@@ -1,4 +1,5 @@
 from torch import nn
+import torch
 import numpy as np
 from scripts.scaled_dot_product_attention import ScaledDotProductAttention
 class MultiHeadAttention(nn.Module):
@@ -27,7 +28,7 @@ class MultiHeadAttention(nn.Module):
         batch, n_k, d_k_ = k.size()
         batch, n_v, d_v_ = v.size()
 
-        q = self.fc_q(q) # 1.单头变多头
+        q = self.fc_q(q) # 1.single head to multi head
         k = self.fc_k(k)
         v = self.fc_v(v)
         q = q.view(batch, n_q, n_head, d_q).permute(2, 0, 1, 3).contiguous().view(-1, n_q, d_q)
@@ -36,14 +37,14 @@ class MultiHeadAttention(nn.Module):
 
         if mask is not None:
             mask = mask.repeat(n_head, 1, 1)
-        attn, output = self.attention(q, k, v, mask=mask) # 2.当成单头注意力求输出
+        attn, output = self.attention(q, k, v, mask=mask) # 2.output of single head
 
         output = output.view(n_head, batch, n_q, d_v).permute(1, 2, 0, 3).contiguous().view(batch, n_q, -1) # 3.Concat
-        output = self.fc_o(output) # 4.仿射变换得到最终输出
+        output = self.fc_o(output) # 4.final output
 
         return attn, output
 
-
+'''
 if __name__ == "__main__":
     n_q, n_k, n_v = 2, 4, 4
     d_q_, d_k_, d_v_ = 128, 128, 64
@@ -58,3 +59,4 @@ if __name__ == "__main__":
 
     print(attn.size())
     print(output.size())
+    '''
