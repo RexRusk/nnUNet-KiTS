@@ -1,5 +1,10 @@
 from typing import Union, Type, List, Tuple
-from dynamic_network_architectures.building_blocks.plain_conv_encoder import PlainConvEncoder
+
+import numpy as np
+
+from dynamic_network_architectures.building_blocks.plain_encoder import PlainEncoder
+
+from dynamic_network_architectures.building_blocks.helper import convert_conv_op_to_dim
 from dynamic_network_architectures.initialization.weight_init import InitWeights_He
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.dropout import _DropoutNd
@@ -36,7 +41,7 @@ class PlainConvAttentionUNet(nn.Module):
                  dropout_attention: float = 0.0):
         super().__init__()
 
-        self.encoder = PlainConvEncoder(input_channels, n_stages, features_per_stage, conv_op, kernel_sizes, strides,
+        self.encoder = PlainEncoder(input_channels, n_stages, features_per_stage, conv_op, kernel_sizes, strides,
                                         n_conv_per_stage, conv_bias, norm_op, norm_op_kwargs, dropout_op,
                                         dropout_op_kwargs, nonlin, nonlin_kwargs, return_skips=True,
                                         nonlin_first=nonlin_first)
@@ -46,7 +51,7 @@ class PlainConvAttentionUNet(nn.Module):
                                         strides=strides_attention, dropout=dropout_attention,
                                         nonlin_first=nonlin_first)
 
-        self.initialize()  # Initialize weights using He initialization
+        # self.initialize()  # Initialize weights using He initialization
 
     def forward(self, x):
         skips = self.encoder(x)
@@ -56,11 +61,29 @@ class PlainConvAttentionUNet(nn.Module):
     def initialize(module):
         InitWeights_He(1e-2)(module)
 
+    def compute_conv_feature_map_size(self, input_size):
+        assert len(input_size) == convert_conv_op_to_dim(
+            self.encoder.conv_op), "just give the image size without color/feature channels or " \
+                                   "batch channel. Do not give input_size=(b, c, x, y(, z)). " \
+                                   "Give input_size=(x, y(, z))!"
+        return self.encoder.compute_conv_feature_map_size(input_size) + self.decoder.compute_conv_feature_map_size(
+            input_size)
+
 
 class AttentionDecoder(nn.Module):
-    def __init__(self, encoder, num_classes, features_per_stage, deep_supervision,
-                 attention=True, up_kernel_size=3, strides=2, dropout=0.0, nonlin_first=False):
+    def __init__(self,
+                 encoder: Union[PlainEncoder],
+                 num_classes,
+                 features_per_stage,
+                 deep_supervision,
+                 attention=True,
+                 up_kernel_size=3,
+                 strides=2,
+                 dropout=0.0,
+                 nonlin_first=False):
         super().__init__()
+        self.deep_supervision = deep_supervision
+        self.encoder = encoder
 
         self.decoder_stages = nn.ModuleList()
         self.attention_layers = nn.ModuleList()
@@ -97,6 +120,35 @@ class AttentionDecoder(nn.Module):
 
         x = self.final_conv(x)
         return x
+
+    def compute_conv_feature_map_size(self, input_size):
+        """
+        IMPORTANT: input_size is the input_size of the encoder!
+        :param input_size:
+        :return:
+        """
+        # first we need to compute the skip sizes. Skip bottleneck because all output feature maps of our ops will at
+        # least have the size of the skip above that (therefore -1)
+        skip_sizes = []
+        for s in range(len(self.encoder.strides) - 1):
+            skip_sizes.append([i // j for i, j in zip(input_size, self.encoder.strides[s])])
+            input_size = skip_sizes[-1]
+        # print(skip_sizes)
+
+        assert len(skip_sizes) == len(self.stages)
+
+        # our ops are the other way around, so let's match things up
+        output = np.int64(0)
+        for s in range(len(self.stages)):
+            # print(skip_sizes[-(s+1)], self.encoder.output_channels[-(s+2)])
+            # conv blocks
+            output += self.stages[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
+            # trans conv
+            output += np.prod([self.encoder.output_channels[-(s + 2)], *skip_sizes[-(s + 1)]], dtype=np.int64)
+            # segmentation
+            if self.deep_supervision or (s == (len(self.stages) - 1)):
+                output += np.prod([self.num_classes, *skip_sizes[-(s + 1)]], dtype=np.int64)
+        return output
 
 class ConvBlock(nn.Module):
 
@@ -259,7 +311,7 @@ class UpConv(nn.Module):
 
 
 if __name__ == '__main__':
-
+    data = torch.rand((1, 4, 128, 128, 128))
     # add parameters here
     model = PlainConvAttentionUNet(4, 6, (32, 64, 125, 256, 320, 320), nn.Conv3d, 3, (1, 2, 2, 2, 2, 2), (2, 2, 2, 2, 2, 2), 4,
                           (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU)

@@ -53,7 +53,7 @@ class SAPlainConvUNet(nn.Module):
                                           nonlin_first=nonlin_first)
         self.decoder = SAUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
                                      nonlin_first=nonlin_first)
-        print('using sa unet...')
+        print('Custom U-Net: Spatial Attention U-Net architecture is implemented.')
 
     def forward(self, x):
         skips = self.encoder(x)
@@ -367,8 +367,8 @@ class SAStackedConvBlocks(nn.Module):
             )
 
         )
-
         self.act = nonlin(**nonlin_kwargs)
+        # self.act = nonlin(nonlin_kwargs)
 
         self.output_channels = output_channels[-1]
         self.initial_stride = maybe_convert_scalar_to_list(conv_op, initial_stride)
@@ -603,3 +603,20 @@ class SpatialAttention(nn.Module):
     def forward(self, x):
         """Apply channel and spatial attention on input for feature recalibration."""
         return x * self.act(self.cv1(torch.cat([torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]], 1)))
+
+
+if __name__ == '__main__':
+    data = torch.rand((1, 4, 128, 128, 128))
+
+    model = SAPlainConvUNet(4, 6, (32, 64, 128, 256, 320, 320), nn.Conv3d, 3, ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2),(1,2,2), (1,2,2)), (2, 2, 2, 2, 2, 2), 4,
+                                (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU, deep_supervision=True)
+
+    if False:
+        import hiddenlayer as hl
+
+        g = hl.build_graph(model, data,
+                           transforms=None)
+        g.save("network_architecture.pdf")
+        del g
+
+    print(model.compute_conv_feature_map_size(data.shape[2:]))

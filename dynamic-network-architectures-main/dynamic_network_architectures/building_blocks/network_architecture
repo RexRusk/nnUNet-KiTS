@@ -1,0 +1,22 @@
+digraph {
+	graph [bgcolor="#FFFFFF" color="#000000" fontcolor="#000000" fontname=Times fontsize=10 margin="0,0" pad="1.0,0.5" rankdir=LR]
+	node [color="#000000" fillcolor="#E8E8E8" fontcolor="#000000" fontname=Times fontsize=10 margin="0,0" shape=box style=filled]
+	edge [color="#000000" fontcolor="#000000" fontname=Times fontsize=10 style=solid]
+	"/outputs/20" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>Conv, kernel_size: [3, 3], stride: [1, 1]</td></tr></table>>]
+	"/outputs/21/22/23" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>BatchNorm</td></tr></table>>]
+	"/outputs/24" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>LeakyRelu</td></tr></table>>]
+	"/outputs/25" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>Conv, kernel_size: [3, 3], stride: [2, 2]</td></tr></table>>]
+	"/outputs/26/27/28" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>BatchNorm</td></tr></table>>]
+	"/outputs/29" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>Relu</td></tr></table>>]
+	"/outputs/30" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>Conv, kernel_size: [3, 3], stride: [1, 1]</td></tr></table>>]
+	"/outputs/31/32/33" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>BatchNorm</td></tr></table>>]
+	"/outputs/34" [label=<<table border='0' cellborder='0' cellpadding='0'><tr><td cellpadding='6'>Relu</td></tr></table>>]
+	"/outputs/20" -> "/outputs/21/22/23" [label="1x24x40x32"]
+	"/outputs/21/22/23" -> "/outputs/24"
+	"/outputs/24" -> "/outputs/25" [label="1x24x40x32"]
+	"/outputs/25" -> "/outputs/26/27/28" [label="1x16x20x16"]
+	"/outputs/26/27/28" -> "/outputs/29"
+	"/outputs/29" -> "/outputs/30" [label="1x16x20x16"]
+	"/outputs/30" -> "/outputs/31/32/33" [label="1x16x20x16"]
+	"/outputs/31/32/33" -> "/outputs/34"
+}

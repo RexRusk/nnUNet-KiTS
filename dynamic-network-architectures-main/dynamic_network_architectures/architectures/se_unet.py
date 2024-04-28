@@ -56,7 +56,7 @@ class SEPlainConvUNet(nn.Module):
                                           nonlin_first=nonlin_first)
         self.decoder = SEUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
                                      nonlin_first=nonlin_first)
-        print('using se unet...')
+        print('Custom U-Net: Squeeze Excitation U-Net architecture is implemented.')
 
     def forward(self, x):
         skips = self.encoder(x)
@@ -371,7 +371,8 @@ class SEStackedConvBlocks(nn.Module):
 
         )
 
-        self.act = nonlin(**nonlin_kwargs)
+        # self.act = nonlin(**nonlin_kwargs)
+        self.act = nonlin(nonlin_kwargs)
 
         self.output_channels = output_channels[-1]
         self.initial_stride = maybe_convert_scalar_to_list(conv_op, initial_stride)
@@ -617,3 +618,20 @@ class SEAttention(nn.Module):
                 init.normal_(m.weight, std=0.001)
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
+
+
+if __name__ == '__main__':
+    data = torch.rand((1, 4, 128, 128, 128))
+
+    model = SEPlainConvUNet(4, 6, (32, 64, 128, 256, 320, 320), nn.Conv3d, 3, ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2),(1,2,2), (1,2,2)), (2, 2, 2, 2, 2, 2), 4,
+                                (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU, deep_supervision=True)
+
+    if False:
+        import hiddenlayer as hl
+
+        g = hl.build_graph(model, data,
+                           transforms=None)
+        g.save("network_architecture.pdf")
+        del g
+
+    print(model.compute_conv_feature_map_size(data.shape[2:]))
