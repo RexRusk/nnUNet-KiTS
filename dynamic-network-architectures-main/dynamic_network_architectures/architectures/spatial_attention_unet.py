@@ -10,13 +10,8 @@ from dynamic_network_architectures.building_blocks.helper import maybe_convert_s
 import numpy as np
 from dynamic_network_architectures.building_blocks.helper import get_matching_convtransp
 
-import numpy as np
-from torch.nn import init
 
-"""
-This script has some bugs, do not use it!
-"""
-class SEPlainConvUNet(nn.Module):
+class SAPlainConvUNet(nn.Module):
     def __init__(self,
                  input_channels: int,
                  n_stages: int,
@@ -52,13 +47,13 @@ class SEPlainConvUNet(nn.Module):
                                                                 f"as we have resolution stages. here: {n_stages} " \
                                                                 f"stages, so it should have {n_stages - 1} entries. " \
                                                                 f"n_conv_per_stage_decoder: {n_conv_per_stage_decoder}"
-        self.encoder = SEPlainConvEncoder(input_channels, n_stages, features_per_stage, conv_op, kernel_sizes, strides,
+        self.encoder = SAPlainConvEncoder(input_channels, n_stages, features_per_stage, conv_op, kernel_sizes, strides,
                                           n_conv_per_stage, conv_bias, norm_op, norm_op_kwargs, dropout_op,
                                           dropout_op_kwargs, nonlin, nonlin_kwargs, return_skips=True,
                                           nonlin_first=nonlin_first)
-        self.decoder = SEUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
+        self.decoder = SAUNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
                                      nonlin_first=nonlin_first)
-        print('using se unet...')
+        print('using sa unet...')
 
     def forward(self, x):
         skips = self.encoder(x)
@@ -77,7 +72,7 @@ class SEPlainConvUNet(nn.Module):
         InitWeights_He(1e-2)(module)
 
 
-class SEPlainConvEncoder(nn.Module):
+class SAPlainConvEncoder(nn.Module):
     def __init__(self,
                  input_channels: int,
                  n_stages: int,
@@ -129,7 +124,7 @@ class SEPlainConvEncoder(nn.Module):
                 conv_stride = strides[s]
             else:
                 raise RuntimeError()
-            stage_modules.append(SEStackedConvBlocks(
+            stage_modules.append(SAStackedConvBlocks(
                 n_conv_per_stage[s], conv_op, input_channels, features_per_stage[s], kernel_sizes[s], conv_stride,
                 conv_bias, norm_op, norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
             ))
@@ -175,9 +170,9 @@ class SEPlainConvEncoder(nn.Module):
         return output
 
 
-class SEUNetDecoder(nn.Module):
+class SAUNetDecoder(nn.Module):
     def __init__(self,
-                 encoder: Union[SEPlainConvEncoder],
+                 encoder: Union[SAPlainConvEncoder],
                  num_classes: int,
                  n_conv_per_stage: Union[int, Tuple[int, ...], List[int]],
                  deep_supervision,
@@ -237,7 +232,7 @@ class SEUNetDecoder(nn.Module):
                 bias=conv_bias
             ))
             # input features to conv is 2x input_features_skip (concat input_features_skip with transpconv output)
-            stages.append(SEStackedConvBlocks(
+            stages.append(SAStackedConvBlocks(
                 n_conv_per_stage[s - 1], encoder.conv_op, 2 * input_features_skip, input_features_skip,
                 encoder.kernel_sizes[-(s + 1)], 1,
                 conv_bias,
@@ -316,7 +311,7 @@ class SEUNetDecoder(nn.Module):
         return output
 
 
-class SEStackedConvBlocks(nn.Module):
+class SAStackedConvBlocks(nn.Module):
     def __init__(self,
                  num_convs: int,
                  conv_op: Type[_ConvNd],
@@ -366,7 +361,7 @@ class SEStackedConvBlocks(nn.Module):
                 for i in range(1, num_convs - 1)
             ],
 
-            SE(
+            SA(
                 conv_op, output_channels[-2], output_channels[-1], kernel_size, 1, conv_bias, norm_op,
                 norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
             )
@@ -526,7 +521,7 @@ class ConvDropoutNorm(nn.Module):
         return np.prod([self.output_channels, *output_size], dtype=np.int64)
 
 
-class SE(nn.Module):
+class SA(nn.Module):
     def __init__(self,
                  conv_op: Type[_ConvNd],
                  input_channels: int,
@@ -542,7 +537,7 @@ class SE(nn.Module):
                  nonlin_kwargs: dict = None,
                  nonlin_first: bool = False
                  ):
-        super(SE, self).__init__()
+        super(SA, self).__init__()
         self.input_channels = input_channels
         self.output_channels = output_channels
         stride = maybe_convert_scalar_to_list(conv_op, stride)
@@ -576,11 +571,11 @@ class SE(nn.Module):
             ops.append(self.norm)
 
         self.all_modules = nn.Sequential(*ops)
-        self.se = SEAttention(conv_op=conv_op, channel=output_channels)
+        self.sa = SpatialAttention(conv_op=conv_op, kernel_size=7)
 
     def forward(self, x):
         x = self.all_modules(x)
-        x = self.se(x) * x
+        x = self.sa(x) * x
         return x
 
     def compute_conv_feature_map_size(self, input_size):
@@ -591,31 +586,20 @@ class SE(nn.Module):
         return np.prod([self.output_channels, *output_size], dtype=np.int64)
 
 
-class SEAttention(nn.Module):
-    def __init__(self, conv_op, channel=512, reduction=16):
-        super().__init__()
+class SpatialAttention(nn.Module):
+    """Spatial-attention module."""
 
+    def __init__(self, conv_op, kernel_size=7):
+        """Initialize Spatial-attention module with kernel size argument."""
+        super().__init__()
+        assert kernel_size in (3, 7), "kernel size must be 3 or 7"
+        padding = 3 if kernel_size == 7 else 1
         if conv_op == torch.nn.modules.conv.Conv2d:
-            self.pool = nn.AdaptiveAvgPool2d(1)
+            self.cv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
         elif conv_op == torch.nn.modules.conv.Conv3d:
-            self.pool = nn.AdaptiveAvgPool3d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(channel // reduction, channel, bias=False),
-            nn.Sigmoid()
-        )
+            self.cv1 = nn.Conv3d(2, 1, kernel_size, padding=padding, bias=False)
+        self.act = nn.Sigmoid()
 
     def forward(self, x):
-        size = x.size()
-        b, c = size[0], size[1]
-        y = self.pool(x).view(b, c)
-        y = self.fc(y).view(b, c, *[1 for i in range(len(size) - 2)])
-        return x * y.expand_as(x)
-
-    def init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                init.normal_(m.weight, std=0.001)
-                if m.bias is not None:
-                    init.constant_(m.bias, 0)
+        """Apply channel and spatial attention on input for feature recalibration."""
+        return x * self.act(self.cv1(torch.cat([torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]], 1)))
