@@ -8,8 +8,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 from __future__ import annotations
+
+import numpy as np
+
+from dynamic_network_architectures.building_blocks.helper import convert_conv_op_to_dim
+
 
 from collections.abc import Sequence
 
@@ -282,18 +286,4 @@ class AttentionUnet(nn.Module):
         return x_m
 
 
-if __name__ == '__main__':
 
-    # add parameters here
-    model = AttentionUnet(4, 6, (32, 64, 125, 256, 320, 320), nn.Conv3d, 3, (1, 2, 2, 2, 2, 2), (2, 2, 2, 2, 2, 2), 4,
-                          (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU)
-
-    if False:
-        import hiddenlayer as hl
-
-        g = hl.build_graph(model, data,
-                           transforms=None)
-        g.save("network_architecture.pdf")
-        del g
-
-    print(model.compute_conv_feature_map_size(data.shape[2:]))

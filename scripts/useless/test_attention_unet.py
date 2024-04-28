@@ -58,7 +58,7 @@ class PlainConvAttentionUNet(nn.Module):
 
 
 class AttentionDecoder(nn.Module):
-    def __init__(self, encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
+    def __init__(self, encoder, num_classes, features_per_stage, deep_supervision,
                  attention=True, up_kernel_size=3, strides=2, dropout=0.0, nonlin_first=False):
         super().__init__()
 
@@ -66,7 +66,7 @@ class AttentionDecoder(nn.Module):
         self.attention_layers = nn.ModuleList()
 
         # Reverse the encoder's feature list for decoder
-        reversed_features = encoder.features_per_stage[::-1]
+        reversed_features = features_per_stage[::-1]
 
         # Build decoder stages
         for idx, (in_channels, out_channels) in enumerate(zip(reversed_features[:-1], reversed_features[1:])):

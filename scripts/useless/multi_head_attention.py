@@ -1,7 +1,6 @@
 from torch import nn
-import torch
 import numpy as np
-from scripts.scaled_dot_product_attention import ScaledDotProductAttention
+from scripts.useless.scaled_dot_product_attention import ScaledDotProductAttention
 class MultiHeadAttention(nn.Module):
     """ Multi-Head Attention """
 
