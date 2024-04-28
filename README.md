@@ -5,3 +5,5 @@ method for deep learning-based biomedical image segmentation. Nature methods, 18
 This is my capstone project practice.
 Use nnUNet v2 for kidney tumor segmentation.
 I will try KiTS19 first, then use the clinical datasets for my personal training.
+
+The dataset and guidance will be added soon.
