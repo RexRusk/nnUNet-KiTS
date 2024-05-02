@@ -344,11 +344,11 @@ class SE(nn.Module):
         self.all_modules = nn.Sequential(*ops)
 
         # se attention after conv dropoutnormrelu
-        # self.se = SEAttention(conv_op=conv_op, channel=output_channels)
+        self.se = SEAttention(conv_op=conv_op, channel=output_channels)
 
     def forward(self, x):
         x = self.all_modules(x)
-        # x = self.se(x) * x
+        x = self.se(x) * x
         return x
 
     def compute_conv_feature_map_size(self, input_size):

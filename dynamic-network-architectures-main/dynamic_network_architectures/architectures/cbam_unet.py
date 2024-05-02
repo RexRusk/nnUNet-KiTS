@@ -10,7 +10,7 @@ from dynamic_network_architectures.building_blocks.helper import maybe_convert_s
 import numpy as np
 from dynamic_network_architectures.building_blocks.helper import get_matching_convtransp
 
-
+# PARAPELL CA AND SA! NOT CONCAT
 class CBAMPlainConvUNet(nn.Module):
     def __init__(self,
                  input_channels: int,

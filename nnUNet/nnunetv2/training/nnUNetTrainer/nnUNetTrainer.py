@@ -146,7 +146,7 @@ class nnUNetTrainer(object):
         self.oversample_foreground_percent = 0.33
         self.num_iterations_per_epoch = 80
         self.num_val_iterations_per_epoch = 16
-        self.num_epochs = 50
+        self.num_epochs = 100
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
