@@ -367,7 +367,7 @@ class SAStackedConvBlocks(nn.Module):
             )
 
         )
-        self.act = nonlin(**nonlin_kwargs)
+        # self.act = nonlin(**nonlin_kwargs)
         # self.act = nonlin(nonlin_kwargs)
 
         self.output_channels = output_channels[-1]
@@ -375,7 +375,7 @@ class SAStackedConvBlocks(nn.Module):
 
     def forward(self, x):
         out = self.convs(x)
-        out = self.act(out)
+        # out = self.act(out)
         return out
 
     def compute_conv_feature_map_size(self, input_size):

@@ -8,6 +8,16 @@ from torch.nn.modules.conv import _ConvNd, _ConvTransposeNd
 from torch.nn.modules.dropout import _DropoutNd
 from torch.nn.modules.instancenorm import _InstanceNorm
 
+class InitWeights_He(object):
+    def __init__(self, neg_slope: float = 1e-2):
+        self.neg_slope = neg_slope
+
+    def __call__(self, module):
+        if isinstance(module, nn.Conv3d) or isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d) or isinstance(module, nn.ConvTranspose3d):
+            module.weight = nn.init.kaiming_normal_(module.weight, a=self.neg_slope)
+            if module.bias is not None:
+                module.bias = nn.init.constant_(module.bias, 0)
+
 def convert_dim_to_conv_op(dimension: int) -> Type[_ConvNd]:
     """
     :param dimension: 1, 2 or 3
@@ -109,7 +119,6 @@ def get_matching_pool_op(conv_op: Type[_ConvNd] = None,
             else:
                 return nn.MaxPool3d
 
-
 def get_matching_instancenorm(conv_op: Type[_ConvNd] = None, dimension: int = None) -> Type[_InstanceNorm]:
     """
     You MUST set EITHER conv_op OR dimension. Do not set both!
@@ -148,7 +157,6 @@ def get_matching_dropout(conv_op: Type[_ConvNd] = None, dimension: int = None) -
         return nn.Dropout2d
     elif dimension == 3:
         return nn.Dropout3d
-
 
 def maybe_convert_scalar_to_list(conv_op, scalar):
     """
@@ -276,7 +284,8 @@ class ConvDropoutNormReLU(nn.Module):
         output_size = [i // j for i, j in zip(input_size, self.stride)]  # we always do same padding
         return np.prod([self.output_channels, *output_size], dtype=np.int64)
 
-class SEConvDropoutNormReLU(nn.Module):
+# modified the convdropoutnormrelu
+class SE(nn.Module):
     def __init__(self,
                  conv_op: Type[_ConvNd],
                  input_channels: int,
@@ -292,7 +301,7 @@ class SEConvDropoutNormReLU(nn.Module):
                  nonlin_kwargs: dict = None,
                  nonlin_first: bool = False
                  ):
-        super(SEConvDropoutNormReLU, self).__init__()
+        super(SE, self).__init__()
         self.input_channels = input_channels
         self.output_channels = output_channels
         stride = maybe_convert_scalar_to_list(conv_op, stride)
@@ -335,12 +344,12 @@ class SEConvDropoutNormReLU(nn.Module):
         self.all_modules = nn.Sequential(*ops)
 
         # se attention after conv dropoutnormrelu
-        self.se = SEAttention(conv_op=conv_op, channel=output_channels)
+        # self.se = SEAttention(conv_op=conv_op, channel=output_channels)
+
     def forward(self, x):
         x = self.all_modules(x)
-        x = self.se(x) * x
+        # x = self.se(x) * x
         return x
-
 
     def compute_conv_feature_map_size(self, input_size):
         assert len(input_size) == len(self.stride), "just give the image size without color/feature channels or " \
@@ -348,6 +357,7 @@ class SEConvDropoutNormReLU(nn.Module):
                                                     "Give input_size=(x, y(, z))!"
         output_size = [i // j for i, j in zip(input_size, self.stride)]  # we always do same padding
         return np.prod([self.output_channels, *output_size], dtype=np.int64)
+
 
 class SEAttention(nn.Module):
     def __init__(self, conv_op, channel=512, reduction=16):
@@ -377,6 +387,7 @@ class SEAttention(nn.Module):
                 init.normal_(m.weight, std=0.001)
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
+
 class StackedConvBlocks(nn.Module):
     def __init__(self,
                  num_convs: int,
@@ -416,17 +427,17 @@ class StackedConvBlocks(nn.Module):
             output_channels = [output_channels] * num_convs
 
         self.convs = nn.Sequential(
-            SEConvDropoutNormReLU(
+            ConvDropoutNormReLU(
                 conv_op, input_channels, output_channels[0], kernel_size, initial_stride, conv_bias, norm_op,
                 norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
             ),
             *[
-                SEConvDropoutNormReLU(
+                ConvDropoutNormReLU(
                     conv_op, output_channels[i - 1], output_channels[i], kernel_size, 1, conv_bias, norm_op,
                     norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
                 )
                 for i in range(1, num_convs)
-            ]
+            ],
         )
 
         self.output_channels = output_channels[-1]
@@ -484,12 +495,12 @@ class SEStackedConvBlocks(nn.Module):
             output_channels = [output_channels] * num_convs
 
         self.convs = nn.Sequential(
-            SEConvDropoutNormReLU(
+            SE(
                 conv_op, output_channels[-2], output_channels[-1], kernel_size, 1, conv_bias, norm_op,
                 norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
             ),
             *[
-                SEConvDropoutNormReLU(
+                SE(
                 conv_op, output_channels[-2], output_channels[-1], kernel_size, 1, conv_bias, norm_op,
                 norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
             )
@@ -512,6 +523,8 @@ class SEStackedConvBlocks(nn.Module):
         for b in self.convs[1:]:
             output += b.compute_conv_feature_map_size(size_after_stride)
         return output
+
+
 class PlainConvEncoder(nn.Module):
     def __init__(self,
                  input_channels: int,
@@ -542,11 +555,14 @@ class PlainConvEncoder(nn.Module):
             n_conv_per_stage = [n_conv_per_stage] * n_stages
         if isinstance(strides, int):
             strides = [strides] * n_stages
-        assert len(kernel_sizes) == n_stages, "kernel_sizes must have as many entries as we have resolution stages (n_stages)"
-        assert len(n_conv_per_stage) == n_stages, "n_conv_per_stage must have as many entries as we have resolution stages (n_stages)"
-        assert len(features_per_stage) == n_stages, "features_per_stage must have as many entries as we have resolution stages (n_stages)"
+        assert len(
+            kernel_sizes) == n_stages, "kernel_sizes must have as many entries as we have resolution stages (n_stages)"
+        assert len(
+            n_conv_per_stage) == n_stages, "n_conv_per_stage must have as many entries as we have resolution stages (n_stages)"
+        assert len(
+            features_per_stage) == n_stages, "features_per_stage must have as many entries as we have resolution stages (n_stages)"
         assert len(strides) == n_stages, "strides must have as many entries as we have resolution stages (n_stages). " \
-                                             "Important: first entry is recommended to be 1, else we run strided conv drectly on the input"
+                                         "Important: first entry is recommended to be 1, else we run strided conv drectly on the input"
 
         stages = []
         for s in range(n_stages):
@@ -554,15 +570,28 @@ class PlainConvEncoder(nn.Module):
             if pool == 'max' or pool == 'avg':
                 if (isinstance(strides[s], int) and strides[s] != 1) or \
                         isinstance(strides[s], (tuple, list)) and any([i != 1 for i in strides[s]]):
-                    stage_modules.append(get_matching_pool_op(conv_op, pool_type=pool)(kernel_size=strides[s], stride=strides[s]))
+                    stage_modules.append(
+                        get_matching_pool_op(conv_op, pool_type=pool)(kernel_size=strides[s], stride=strides[s]))
                 conv_stride = 1
             elif pool == 'conv':
                 conv_stride = strides[s]
             else:
                 raise RuntimeError()
             stage_modules.append(StackedConvBlocks(
-                n_conv_per_stage[s], conv_op, input_channels, features_per_stage[s], kernel_sizes[s], conv_stride,
-                conv_bias, norm_op, norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin, nonlin_kwargs, nonlin_first
+                n_conv_per_stage[s],
+                conv_op,
+                input_channels,
+                features_per_stage[s],
+                kernel_sizes[s],
+                conv_stride,
+                conv_bias,
+                norm_op,
+                norm_op_kwargs,
+                dropout_op,
+                dropout_op_kwargs,
+                nonlin,
+                nonlin_kwargs,
+                nonlin_first
             ))
             stages.append(nn.Sequential(*stage_modules))
             input_channels = features_per_stage[s]
@@ -644,8 +673,8 @@ class UNetDecoder(nn.Module):
         if isinstance(n_conv_per_stage, int):
             n_conv_per_stage = [n_conv_per_stage] * (n_stages_encoder - 1)
         assert len(n_conv_per_stage) == n_stages_encoder - 1, "n_conv_per_stage must have as many entries as we have " \
-                                                          "resolution stages - 1 (n_stages in encoder - 1), " \
-                                                          "here: %d" % n_stages_encoder
+                                                              "resolution stages - 1 (n_stages in encoder - 1), " \
+                                                              "here: %d" % n_stages_encoder
 
         transpconv_op = get_matching_convtransp(conv_op=encoder.conv_op)
         conv_bias = encoder.conv_bias if conv_bias is None else conv_bias
@@ -656,12 +685,10 @@ class UNetDecoder(nn.Module):
         nonlin = encoder.nonlin if nonlin is None else nonlin
         nonlin_kwargs = encoder.nonlin_kwargs if nonlin_kwargs is None else nonlin_kwargs
 
-
         # we start with the bottleneck and work out way up
         stages = []
         transpconvs = []
         seg_layers = []
-
 
         for s in range(1, n_stages_encoder):
             input_features_below = encoder.output_channels[-s]
@@ -672,8 +699,8 @@ class UNetDecoder(nn.Module):
                 bias=conv_bias
             ))
             # input features to conv is 2x input_features_skip (concat input_features_skip with transpconv output)
-            stages.append(StackedConvBlocks(
-                n_conv_per_stage[s-1], encoder.conv_op, 2 * input_features_skip, input_features_skip,
+            stages.append(SEStackedConvBlocks(
+                n_conv_per_stage[s - 1], encoder.conv_op, 2 * input_features_skip, input_features_skip,
                 encoder.kernel_sizes[-(s + 1)], 1,
                 conv_bias,
                 norm_op,
@@ -704,7 +731,7 @@ class UNetDecoder(nn.Module):
         seg_outputs = []
         for s in range(len(self.stages)):
             x = self.transpconvs[s](lres_input)
-            x = torch.cat((x, skips[-(s+2)]), 1)
+            x = torch.cat((x, skips[-(s + 2)]), 1)
             x = self.stages[s](x)
             if self.deep_supervision:
                 seg_outputs.append(self.seg_layers[s](x))
@@ -742,23 +769,13 @@ class UNetDecoder(nn.Module):
         for s in range(len(self.stages)):
             # print(skip_sizes[-(s+1)], self.encoder.output_channels[-(s+2)])
             # conv blocks
-            output += self.stages[s].compute_conv_feature_map_size(skip_sizes[-(s+1)])
+            output += self.stages[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
             # trans conv
-            output += np.prod([self.encoder.output_channels[-(s+2)], *skip_sizes[-(s+1)]], dtype=np.int64)
+            output += np.prod([self.encoder.output_channels[-(s + 2)], *skip_sizes[-(s + 1)]], dtype=np.int64)
             # segmentation
             if self.deep_supervision or (s == (len(self.stages) - 1)):
-                output += np.prod([self.num_classes, *skip_sizes[-(s+1)]], dtype=np.int64)
+                output += np.prod([self.num_classes, *skip_sizes[-(s + 1)]], dtype=np.int64)
         return output
-
-class InitWeights_He(object):
-    def __init__(self, neg_slope: float = 1e-2):
-        self.neg_slope = neg_slope
-
-    def __call__(self, module):
-        if isinstance(module, nn.Conv3d) or isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d) or isinstance(module, nn.ConvTranspose3d):
-            module.weight = nn.init.kaiming_normal_(module.weight, a=self.neg_slope)
-            if module.bias is not None:
-                module.bias = nn.init.constant_(module.bias, 0)
 
 class PlainConvUNet(nn.Module):
     def __init__(self,
@@ -818,13 +835,12 @@ class PlainConvUNet(nn.Module):
         InitWeights_He(1e-2)(module)
 
 
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     data = torch.rand((1, 4, 128, 128, 128))
 
-    model = PlainConvUNet(4, 6, (32, 64, 128, 256, 320, 320), nn.Conv3d, 3, ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2),(1,2,2), (1,2,2)), (2, 2, 2, 2, 2, 2), 4,
-                                (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU, deep_supervision=True)
+    model = PlainConvUNet(4, 6, (32, 64, 128, 256, 320, 320), nn.Conv3d, 3,
+                          ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2), (1, 2, 2), (1, 2, 2)), (2, 2, 2, 2, 2, 2), 4,
+                          (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU, deep_supervision=True)
 
     if False:
         import hiddenlayer as hl

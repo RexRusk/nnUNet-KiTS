@@ -372,14 +372,14 @@ class SEStackedConvBlocks(nn.Module):
         )
 
         # self.act = nonlin(**nonlin_kwargs)
-        self.act = nonlin(nonlin_kwargs)
+        # self.act = nonlin(nonlin_kwargs)
 
         self.output_channels = output_channels[-1]
         self.initial_stride = maybe_convert_scalar_to_list(conv_op, initial_stride)
 
     def forward(self, x):
         out = self.convs(x)
-        out = self.act(out)
+        #out = self.act(out)
         return out
 
     def compute_conv_feature_map_size(self, input_size):
