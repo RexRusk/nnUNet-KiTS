@@ -174,8 +174,17 @@ class CSAConvUNet(nn.Module):
 if __name__ == '__main__':
     data = torch.rand((1, 4, 128, 128, 128))
 
-    model = CSAConvUNet(4, 6, (32, 64, 128, 256, 320, 320), nn.Conv3d, 3, ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2),(1,2,2), (1,2,2)), (2, 2, 2, 2, 2, 2), 4,
-                                (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU, deep_supervision=True)
+    model = CSAConvUNet(4,
+                        6,
+                        (32, 64, 128, 256, 320, 320),
+                        nn.Conv3d,
+                        3,
+                        ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2),(1,2,2), (1,2,2)),
+                        (2, 2, 2, 2, 2, 2),
+                        4,
+                        (2, 2, 2, 2, 2),
+                        False,
+                        nn.BatchNorm3d, None, None, None, nn.ReLU, deep_supervision=True)
 
     if False:
         import hiddenlayer as hl
