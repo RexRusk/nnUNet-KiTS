@@ -64,7 +64,7 @@ from torch import distributed as dist
 from torch.cuda import device_count
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+from adan_pytorch import Adan
 
 class nnUNetTrainer(object):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict, unpack_dataset: bool = True,
@@ -144,9 +144,9 @@ class nnUNetTrainer(object):
         self.initial_lr = 1e-2
         self.weight_decay = 3e-5
         self.oversample_foreground_percent = 0.33
-        self.num_iterations_per_epoch = 80
-        self.num_val_iterations_per_epoch = 16
-        self.num_epochs = 100
+        self.num_iterations_per_epoch = 32
+        self.num_val_iterations_per_epoch = 8
+        self.num_epochs = 50
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -182,7 +182,7 @@ class nnUNetTrainer(object):
         # self.configure_rotation_dummyDA_mirroring_and_inital_patch_size and will be saved in checkpoints
 
         ### checkpoint saving stuff
-        self.save_every = 50
+        self.save_every = 25
         self.disable_checkpointing = False
 
         ## DDP batch size and oversampling can differ between workers and needs adaptation
@@ -358,6 +358,7 @@ class nnUNetTrainer(object):
             self.oversample_foreground_percent = oversample_percent
 
     def _build_loss(self):
+
         if self.label_manager.has_regions:
             loss = DC_and_BCE_loss({},
                                    {'batch_dice': self.configuration_manager.batch_dice,
@@ -368,6 +369,14 @@ class nnUNetTrainer(object):
             loss = DC_and_CE_loss({'batch_dice': self.configuration_manager.batch_dice,
                                    'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, {}, weight_ce=1, weight_dice=1,
                                   ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
+
+
+        # If you cannot try this loss correctly, modify the loss in nnUNet/nnunetv2/training/loss/compound_losses.py and apply to your environment
+        '''
+        loss = DC_and_FocalLoss({'batch_dice': self.configuration_manager.batch_dice,
+                               'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, {}, weight_focal=1, weight_dice=1,
+                              ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
+        '''
 
         # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
         # this gives higher resolution outputs more weight in the loss
@@ -484,8 +493,16 @@ class nnUNetTrainer(object):
             self.print_to_log_file('These are the global plan.json settings:\n', dct, '\n', add_timestamp=False)
 
     def configure_optimizers(self):
+
         optimizer = torch.optim.SGD(self.network.parameters(), self.initial_lr, weight_decay=self.weight_decay,
                                     momentum=0.99, nesterov=True)
+
+        '''optimizer = Adan(
+            self.network.parameters(),
+            self.initial_lr,  # learning rate (can be much higher than Adam, up to 5-10x)
+            betas=(0.02, 0.08, 0.01),  # beta 1-2-3 as described in paper - author says most sensitive to beta3 tuning
+            weight_decay=0.02  # weight decay 0.02 is optimal per author
+        )'''
         lr_scheduler = PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
         return optimizer, lr_scheduler
 

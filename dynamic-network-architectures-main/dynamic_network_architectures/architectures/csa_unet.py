@@ -9,22 +9,6 @@ from dynamic_network_architectures.building_blocks.plain_conv_encoder import Pla
 from dynamic_network_architectures.building_blocks.unet_decoder import UNetDecoder
 from dynamic_network_architectures.initialization.weight_init import InitWeights_He
 
-class ChanAttention(nn.Module):
-    def __init__(self, C):
-        super(ChanAttention, self).__init__()
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.linear1 = nn.Linear(C, C // 4, bias=False)
-        self.relu = nn.ReLU()
-        self.linear2 = nn.Linear(C // 4, C, bias=False)
-        self.sigm = nn.Sigmoid()
-
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avgpool(x)
-        y = self.linear1(y.view(b, c))
-        y = self.sigm(self.linear2(self.relu(y))).view(b, c, 1, 1)
-        return x * y.expand_as(x)
-
 
 class SpatialAttention(nn.Module):
     def __init__(self):
@@ -33,10 +17,13 @@ class SpatialAttention(nn.Module):
         self.conv = ConvBlock(2, 1, 3, 1, 1)
 
     def forward(self, x):
+        # Mean pooling and max pooling along the channel dimension
         x1 = torch.mean(x, dim=1, keepdim=True)
         x2, _ = torch.max(x, dim=1, keepdim=True)
+        # Concatenating pooled features and passing through ConvBlock
         out = torch.cat((x1, x2), dim=1)
         out = self.conv(out)
+        # Applying sigmoid and scaling the input with the attention map
         return self.sigm(out) * x
 
 
@@ -53,19 +40,53 @@ class ConvBlock(nn.Module):
         return x
 
     def init_weight(self):
-        # 使用 Kaiming 正态分布初始化卷积层的权重
+        # Initialize the weights of the convolutional layer using the Kaiming normal distribution
         init.kaiming_normal_(self.conv.weight, a=0)
-        # 如果卷积层有偏置，则初始化为 0
+        # If the convolutional layer has a bias, initialized to 0
         if self.conv.bias is not None:
             init.constant_(self.conv.bias, 0)
 
         init.constant_(self.batchnorm.weight, 0)
         init.constant_(self.batchnorm.bias, 0)
 
+class ChanAttention(nn.Module):
+    def __init__(self, C):
+        super(ChanAttention, self).__init__()
+        '''
+        Adaptive average pooling, max pooling to reduce spatial dimensions to 1x1
+        C is channel, 4 is ratio
+        '''
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.maxpool = nn.AdaptiveMaxPool2d((1, 1))
+
+        '''
+        self.linear1 = nn.Linear(C, C // 4, bias=False)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(C // 4, C, bias=False)
+        '''
+        # TODO try 3D conv
+        self.shared_MLP = nn.Sequential(
+            nn.Conv2d(C, C // 4, 1, bias=False),
+            nn.ReLU(),
+            nn.Conv2d(C // 4, C, 1, bias=False)
+        )
+
+        self.sigm = nn.Sigmoid()# Sigmoid activation for output between 0 and 1
+
+    def forward(self, x):
+        '''
+        b, c, _, _ = x.size()# Get batch size, channels, (height, and width)
+        y = self.avgpool(x)# Perform 2D adaptive average pooling
+        y = self.linear1(y.view(b, c))# Flatten the pooled output for linear layer processing
+        y = self.sigm(self.linear2(self.relu(y))).view(b, c, 1, 1)# Non-linear transformation with ReLU and Sigmoid, reshape back to apply attention across channels
+        return x * y.expand_as(x)# Apply the attention weights by scaling the input
+        '''
+        avgout = self.shared_MLP(self.avg_pool(x))
+        maxout = self.shared_MLP(self.max_pool(x))
+        return self.sigmoid(avgout + maxout)
 
 
-
-class PlainConvUNet(nn.Module):
+class CSAConvUNet(nn.Module):
     def __init__(self,
                  input_channels: int,
                  n_stages: int,
@@ -91,7 +112,11 @@ class PlainConvUNet(nn.Module):
         """
         super().__init__()
 
-        # here
+        '''
+        spatial attention does not require any other variables,
+        the channel attention requires the number of channels,
+        therefore that needs to know the features per stage.
+        '''
         channel_attentions = []
         spatial_attentions = []
         for i in range(len(features_per_stage)):
@@ -121,14 +146,14 @@ class PlainConvUNet(nn.Module):
                                         nonlin_first=nonlin_first)
         self.decoder = UNetDecoder(self.encoder, num_classes, n_conv_per_stage_decoder, deep_supervision,
                                    nonlin_first=nonlin_first)
-
+        print('Custom U-Net: Channel-Spatial Attention U-Net architecture is implemented.')
     def forward(self, x):
 
         '''skips = self.encoder(x)
         return self.decoder(skips)'''
 
         skips = self.encoder(x)
-        # 加入注意力机制
+        # add attention modules
         for i in range(len(skips)):
             skips[i] = self.chan_atten[i](skips[i])
             skips[i] = self.spa_atten[i](skips[i])
@@ -149,7 +174,7 @@ class PlainConvUNet(nn.Module):
 if __name__ == '__main__':
     data = torch.rand((1, 4, 128, 128, 128))
 
-    model = PlainConvUNet(4, 6, (32, 64, 128, 256, 320, 320), nn.Conv3d, 3, ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2),(1,2,2), (1,2,2)), (2, 2, 2, 2, 2, 2), 4,
+    model = CSAConvUNet(4, 6, (32, 64, 128, 256, 320, 320), nn.Conv3d, 3, ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2),(1,2,2), (1,2,2)), (2, 2, 2, 2, 2, 2), 4,
                                 (2, 2, 2, 2, 2), False, nn.BatchNorm3d, None, None, None, nn.ReLU, deep_supervision=True)
 
     if False:
