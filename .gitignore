@@ -1,4 +1,5 @@
 /DATASET/
+/scripts/useless/
 *.nii.gz
 *.nii
 *.pkl
